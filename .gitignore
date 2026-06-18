@@ -1,0 +1,10 @@
+/.bundle/
+/vendor/bundle/
+/pkg/
+*.gem
+Gemfile.lock
+/coverage/
+/tmp/
+/.idea/
+/.vscode/
+.DS_Store
