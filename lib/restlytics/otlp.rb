@@ -19,7 +19,7 @@ module Restlytics
     # Stable identifiers for the SDK, surfaced as resource attributes and the scope name.
     SDK_NAME = "restlytics-rails"
     SDK_LANGUAGE = "ruby"
-    SDK_VERSION = "0.1.0"
+    SDK_VERSION = "0.1.1"
 
     module_function
 
