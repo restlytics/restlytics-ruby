@@ -7,8 +7,7 @@ Zero-config performance + error tracing for Rails, shipped to [restlytics](https
 - **Zero added latency** — spans are flushed *after* the HTTP response is sent (Rack body `#close`), fire-and-forget on a background thread with a hard ~2s timeout.
 - **Safe by default** — head-based sampling, SQL normalized to literal-free templates, bindings counted (never sent), query strings scrubbed, no request/response bodies.
 
-> This package is **mirrored from the restlytics monorepo** (`sdks/rails/`) out to the public
-> `restlytics-ruby` repo. Open issues/PRs against the public repo; changes are synced back.
+> **This is the canonical, open-source repository for the restlytics Rails SDK** — published to RubyGems as the `restlytics` gem. Open issues and pull requests here. It conforms to the cross-language restlytics wire contract, so the ingestion service accepts it identically to every other restlytics SDK.
 
 ---
 
