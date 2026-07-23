@@ -90,8 +90,11 @@ module Restlytics
       if incoming
         st.trace_id = incoming[:trace_id]
         st.root_parent_span_id = incoming[:parent_span_id]
-        # Respect an upstream "not sampled" decision; only re-roll if it was sampled.
-        st.sampled = incoming[:sampled] && sample_decision(st.trace_id)
+        # Honor the upstream sampled bit EXACTLY -- no local re-roll. The decision is
+        # made once, by the head of the trace; re-rolling here would let this service
+        # drop a trace its upstream chose to keep, tearing the distributed trace in
+        # half whenever sample_rate < 1.0.
+        st.sampled = incoming[:sampled]
       else
         st.trace_id = Ids.trace_id
         st.root_parent_span_id = nil
