@@ -121,13 +121,13 @@ module Restlytics
     # http.route MUST be the TEMPLATE (e.g. /users/{id}), never the raw URL, so
     # high-cardinality ids don't explode the grouping. Rails exposes the matched
     # route pattern via request.route_uri_pattern (Rails 7+); fall back to the
-    # ActionDispatch routing env, then to the raw path for unrouted requests.
-    def route_template(env, path)
+    # ActionDispatch routing env, then to a non-identifying wildcard.
+    def route_template(env, _path)
       template = rails_route_template(env)
-      template = path if template.nil? || template.empty?
+      template = "/*" if template.nil? || template.empty?
       template
     rescue StandardError
-      path
+      "/*"
     end
 
     def rails_route_template(env)

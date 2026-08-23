@@ -5,7 +5,7 @@ module Restlytics
   # (e.g. config/initializers/restlytics.rb) first, then environment variables,
   # then defaults -- the same keys every restlytics SDK uses (SPEC section 7).
   class Config
-    # Sensitive query-string keys scrubbed from url.full on outbound HTTP spans.
+    # Legacy list retained for compatibility; every outbound query value is scrubbed.
     DEFAULT_QUERY_KEYS = %w[
       token api_key apikey password secret access_token key signature
     ].freeze

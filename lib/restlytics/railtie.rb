@@ -5,6 +5,7 @@ require "rails/railtie"
 require_relative "sql"
 require_relative "span"
 require_relative "middleware"
+require_relative "redact"
 
 module Restlytics
   # Wires the SDK into a Rails 7 app:
@@ -189,27 +190,4 @@ module Restlytics
     end
   end
 
-  # URL redaction helper -- strips sensitive keys from a query string for url.full.
-  # Keeps the host + path (needed for grouping) but never leaks tokens/secrets.
-  # Pure stdlib (URI), no Rails dependency.
-  module Redact
-    require "uri"
-
-    module_function
-
-    def url(raw, redact_keys)
-      uri = URI.parse(raw)
-      return raw if uri.query.nil? || uri.query.empty?
-
-      lower = redact_keys.map { |k| k.to_s.downcase }
-      pairs = URI.decode_www_form(uri.query)
-      scrubbed = pairs.map do |k, v|
-        lower.include?(k.to_s.downcase) ? [k, "REDACTED"] : [k, v]
-      end
-      uri.query = URI.encode_www_form(scrubbed)
-      uri.to_s
-    rescue StandardError
-      raw
-    end
-  end
 end

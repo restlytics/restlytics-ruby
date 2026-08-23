@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "redact"
+
 module Restlytics
   # A single span, accumulated in-request and serialized to OTLP/JSON on flush.
   #
@@ -52,31 +54,39 @@ module Restlytics
     end
 
     def set_string(key, value)
-      @attributes[key] = value.to_s
+      return self if Redact.sensitive_attribute_key?(key)
+
+      raw = value.to_s
+      @attributes[key] = key.to_s.downcase == "url.full" ? Redact.url(raw) : raw
       self
     end
 
     # Record an int attribute. Serialized as intValue (a STRING) per the contract.
     def set_int(key, value)
+      return self if Redact.sensitive_attribute_key?(key)
+
       @attributes[key] = value.to_i
       @int_keys[key] = true
       self
     end
 
     def set_double(key, value)
+      return self if Redact.sensitive_attribute_key?(key)
+
       @attributes[key] = value.to_f
       self
     end
 
     def set_bool(key, value)
+      return self if Redact.sensitive_attribute_key?(key)
+
       @attributes[key] = (value ? true : false)
       self
     end
 
     def set_status(code, message = nil)
       @status_code = code
-      # Cap to keep payloads bounded; full stack traces don't belong on the wire.
-      @status_message = message[0, 1024] unless message.nil?
+      @status_message = Redact.exception_message(message)
       self
     end
 
