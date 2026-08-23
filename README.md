@@ -96,12 +96,21 @@ One `Tracer` instance is shared by the process; **all per-request state lives in
 
 restlytics is built to be safe to run in production against real traffic:
 
-- **Fire-and-forget, never fatal.** Every transport/instrument path is wrapped; telemetry can never raise into — or slow — your app. A slow/unreachable ingest endpoint is bounded by a short timeout, and the send runs on a background thread.
+- **Fire-and-forget, never fatal.** Every transport/instrument path is wrapped; telemetry can never raise into — or slow — your app. One worker drains a fixed 64-batch queue with a hard timeout; saturation drops the new batch and delivery is never retried.
 - **No binding values.** SQL is normalized to a template; only a binding *count* is sent.
 - **No raw SQL** unless you explicitly set `RESTLYTICS_CAPTURE_SQL=true` (then capped at 2048 chars).
 - **Scrubbed URLs.** Every `url.full` query value is redacted and credentials/fragments are removed. `http.route` is always the template.
 - **No content-bearing fields.** Request/response bodies and headers plus exception content are never exported.
 - **Sampling.** Lower `RESTLYTICS_SAMPLE_RATE` to capture a fraction of traffic.
+
+Payload-free delivery counters and bounded shutdown are available on the
+process-wide SDK handle:
+
+```ruby
+health = Restlytics.diagnostics
+Rails.logger.info("restlytics drops=#{health[:dropped_batches]}") if health
+Restlytics.shutdown(timeout_ms: 2000)
+```
 
 ---
 

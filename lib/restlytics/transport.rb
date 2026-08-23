@@ -19,14 +19,22 @@ module Restlytics
     def send_payload(payload)
       raise NotImplementedError
     end
+
+    def flush(timeout_ms: 2000)
+      true
+    end
+
+    def close(timeout_ms: 2000)
+      flush(timeout_ms: timeout_ms)
+    end
   end
 
-  # Default transport: gzip the JSON body and POST it with Net::HTTP, on a
-  # detached Thread so the host request is never blocked.
+  # Default transport: gzip the JSON body and POST it with Net::HTTP using one
+  # worker Thread and a bounded queue so the host request is never blocked.
   #
   # Design constraints (all in service of "telemetry must never hurt the host app"):
   #  - Runs AFTER the response has been flushed (from Rack middleware), and the
-  #    actual send happens on a background Thread, so its latency is invisible.
+  #    actual send happens on a background worker, so its latency is invisible.
   #  - Hard short timeouts (open/read) so a slow/unreachable ingest endpoint can't
   #    pile up worker time.
   #  - Every error path is swallowed. We never raise into the host application.
@@ -39,50 +47,149 @@ module Restlytics
   #   body = gzip(json)
   class HttpTransport < Transport
     DEFAULT_TIMEOUT_MS = 2000
+    DEFAULT_QUEUE_CAPACITY = 64
+    STOP = Object.new.freeze
 
     # @param ingest_url [String] base URL; we POST to {url}/v1/traces
     # @param key [String] ingest key for the X-Restlytics-Key header
     # @param timeout_ms [Integer] open/read timeout in milliseconds
     # @param on_error [#call, nil] optional logger callback: ->(message) {}
-    def initialize(ingest_url:, key:, timeout_ms: DEFAULT_TIMEOUT_MS, on_error: nil)
+    def initialize(ingest_url:, key:, timeout_ms: DEFAULT_TIMEOUT_MS, on_error: nil,
+                   queue_capacity: DEFAULT_QUEUE_CAPACITY)
       super()
       @ingest_url = ingest_url.to_s
       @key = key.to_s
       @timeout_ms = (timeout_ms || DEFAULT_TIMEOUT_MS).to_i
       @on_error = on_error
+      @queue_capacity = [queue_capacity.to_i, 1].max
+      @queue = SizedQueue.new(@queue_capacity)
+      @mutex = Mutex.new
+      @closed = false
+      @in_flight = 0
+      @pending = 0
+      @accepted = 0
+      @delivered = 0
+      @dropped = 0
+      @failed = 0
+      @worker = Thread.new { run }
+      @worker.name = "restlytics-transport" if @worker.respond_to?(:name=)
+      @worker.report_on_exception = false if @worker.respond_to?(:report_on_exception=)
     end
 
     def send_payload(payload)
-      # Defensive: without the basics, there's nothing useful to do -- and we
-      # must not raise, so just bail quietly.
-      return if @ingest_url.empty? || @key.empty?
-
-      # Encode/gzip on the caller's side is cheap; the network send is what we
-      # push to a background thread (fire-and-forget). We swallow everything.
-      json = Otlp.encode(payload)
-      body = gzip(json)
-      return if body.nil?
-
-      url = build_url
-      return if url.nil?
-
-      Thread.new do
-        begin
-          post(url, body)
-        rescue StandardError => e
-          report_error("restlytics: send failed: #{e.class}: #{e.message}")
-        rescue Exception => e # rubocop:disable Lint/RescueException
-          # Absolute backstop -- a background telemetry thread must never crash
-          # the process or surface anything.
-          report_error("restlytics: transport fatal: #{e.class}")
+      outcome = @mutex.synchronize do
+        if @closed || @ingest_url.empty? || @key.empty?
+          :unavailable
+        else
+          begin
+            @pending += 1
+            @accepted += 1
+            @queue.push(payload, true)
+            :accepted
+          rescue ThreadError
+            @pending -= 1
+            @accepted -= 1
+            :full
+          end
         end
       end
+      if outcome == :unavailable
+        record_drop("restlytics: batch dropped because transport is closed or unconfigured")
+        return
+      end
+      if outcome == :full
+        record_drop("restlytics: batch dropped because transport queue is full")
+        return
+      end
+      nil
     rescue StandardError => e
-      # Even spawning the thread / encoding must never raise into the host.
-      report_error("restlytics: transport exception: #{e.class}: #{e.message}")
+      record_drop("restlytics: enqueue failed: #{e.class}: #{e.message}")
+    end
+
+    def diagnostics
+      @mutex.synchronize do
+        {
+          accepted_batches: @accepted,
+          delivered_batches: @delivered,
+          dropped_batches: @dropped,
+          failed_batches: @failed,
+          queued_batches: @queue.length,
+          in_flight_batches: @in_flight,
+          queue_capacity: @queue_capacity,
+          closed: @closed
+        }.freeze
+      end
+    end
+
+    def flush(timeout_ms: DEFAULT_TIMEOUT_MS)
+      deadline = monotonic + [timeout_ms.to_i, 0].max / 1000.0
+      loop do
+        pending = @mutex.synchronize { @pending }
+        return true if pending.zero?
+        return false if monotonic >= deadline
+
+        sleep(0.005)
+      end
+    end
+
+    def close(timeout_ms: DEFAULT_TIMEOUT_MS)
+      already_stopped = @mutex.synchronize do
+        stopped = @closed && !@worker.alive?
+        @closed = true
+        stopped
+      end
+      return true if already_stopped
+
+      flushed = flush(timeout_ms: timeout_ms)
+      return false unless flushed
+
+      @queue.push(STOP, true)
+      @worker.join([timeout_ms.to_i, 0].max / 1000.0)
+      !@worker.alive?
+    rescue ThreadError
+      false
     end
 
     private
+
+    def run
+      loop do
+        payload = @queue.pop
+        break if payload.equal?(STOP)
+
+        @mutex.synchronize { @in_flight = 1 }
+        begin
+          json = Otlp.encode(payload)
+          body = gzip(json)
+          url = build_url
+          raise "payload encoding failed" if body.nil? || url.nil?
+
+          post(url, body)
+          @mutex.synchronize { @delivered += 1 }
+        rescue StandardError => e
+          @mutex.synchronize { @failed += 1 }
+          report_error("restlytics: send failed: #{e.class}: #{e.message}")
+        rescue Exception => e # rubocop:disable Lint/RescueException
+          @mutex.synchronize { @failed += 1 }
+          report_error("restlytics: transport fatal: #{e.class}")
+        ensure
+          @mutex.synchronize do
+            @in_flight = 0
+            @pending -= 1
+          end
+        end
+      end
+    end
+
+    def record_drop(message)
+      @mutex.synchronize { @dropped += 1 }
+      report_error(message)
+      nil
+    end
+
+    def monotonic
+      Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    end
 
     def post(url, body)
       http = Net::HTTP.new(url.host, url.port)

@@ -73,6 +73,20 @@ module Restlytics
       @transport
     end
 
+    # Payload-free transport health counters, when supported by the active driver.
+    def diagnostics
+      @transport&.respond_to?(:diagnostics) ? @transport.diagnostics : nil
+    end
+
+    # Flush accepted work and stop the transport during process shutdown.
+    def shutdown(timeout_ms: 2000)
+      return true unless @transport&.respond_to?(:close)
+
+      @transport.close(timeout_ms: timeout_ms)
+    rescue StandardError
+      false
+    end
+
     # True once init has run and a key is configured.
     def enabled?
       config.enabled?
@@ -80,6 +94,7 @@ module Restlytics
 
     # Reset everything (mainly for tests).
     def reset!
+      shutdown(timeout_ms: 100) if @transport
       @config = nil
       @tracer = nil
       @transport = nil
