@@ -13,6 +13,15 @@ Zero-config performance + error tracing for Rails, shipped to [restlytics](https
 
 ## Install
 
+> [!IMPORTANT]
+> **Not yet published to RubyGems.** `restlytics` returns 404 today — publication is tracked in
+> [restlytics/app#232](https://github.com/restlytics/app/issues/232). Until it lands, install
+> directly from this repository:
+>
+> ```ruby
+> gem "restlytics", git: "https://github.com/restlytics/restlytics-ruby", tag: "v0.1.5"
+> ```
+
 Add to your `Gemfile`:
 
 ```ruby
