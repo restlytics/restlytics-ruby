@@ -48,4 +48,39 @@ class TestTracerSampling < Minitest::Test
     refute @tracer.sampled?, "root trace with sample_rate 0.0 must not be sampled"
     assert_nil @tracer.root_span
   end
+
+  def test_outbound_context_reuses_client_span_id_and_propagates_unsampled_flag
+    capture = Class.new(Restlytics::Transport) do
+      attr_reader :payload
+
+      def send_payload(payload)
+        @payload = payload
+      end
+    end.new
+    tracer = Restlytics::Tracer.new(
+      transport: capture,
+      service_name: "test-service",
+      environment: "test",
+      sample_rate: 1.0
+    )
+    tracer.start_server_span("GET /proxy", SAMPLED_TRACEPARENT)
+    context = tracer.outbound_context
+    refute_nil context
+    span = tracer.add_child_span(
+      "GET api.example.test", tracer.now_ns, tracer.now_ns,
+      span_id: context[:span_id]
+    )
+    refute_nil span
+    tracer.finish_server_span
+
+    spans = capture.payload["resourceSpans"][0]["scopeSpans"][0]["spans"]
+    assert_match(/\A00-4bf92f3577b34da6a3ce929d0e0e4736-[0-9a-f]{16}-01\z/, context[:traceparent])
+    assert_equal context[:span_id], spans[1]["spanId"]
+    assert_equal spans[0]["spanId"], spans[1]["parentSpanId"]
+
+    tracer.start_server_span("GET /proxy", UNSAMPLED_TRACEPARENT)
+    unsampled = tracer.outbound_context
+    assert_match(/\A00-4bf92f3577b34da6a3ce929d0e0e4736-[0-9a-f]{16}-00\z/, unsampled[:traceparent])
+    tracer.reset
+  end
 end

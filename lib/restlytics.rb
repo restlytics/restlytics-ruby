@@ -11,6 +11,7 @@ require_relative "restlytics/transport"
 require_relative "restlytics/config"
 require_relative "restlytics/tracer"
 require_relative "restlytics/middleware"
+require_relative "restlytics/net_http_instrumentation"
 
 # restlytics -- Ruby/Rails SDK.
 #
