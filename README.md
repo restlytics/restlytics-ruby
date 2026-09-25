@@ -54,7 +54,7 @@ Restlytics.configure do |c|
 
   # Per-instrument toggles
   c.instrument_db    = true
-  c.instrument_http  = true     # outbound Net::HTTP (best-effort)
+  c.instrument_http  = true     # Net::HTTP CLIENT spans + W3C traceparent injection
   c.instrument_cache = true
 
   # Paths skipped entirely (exact match or trailing `*`)

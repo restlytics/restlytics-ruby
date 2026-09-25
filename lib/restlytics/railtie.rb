@@ -5,6 +5,7 @@ require "rails/railtie"
 require_relative "sql"
 require_relative "span"
 require_relative "middleware"
+require_relative "net_http_instrumentation"
 require_relative "redact"
 
 module Restlytics
@@ -143,49 +144,10 @@ module Restlytics
       #
       # Redaction: url.full has its query string scrubbed; no headers/bodies sent.
       def patch_net_http
-        return unless defined?(Net::HTTP)
-        return if Net::HTTP.method_defined?(:__restlytics_request)
-
-        query_keys = Restlytics.config.query_keys
-
-        Net::HTTP.class_eval do
-          alias_method :__restlytics_request, :request
-
-          define_method(:request) do |req, body = nil, &block|
-            tracer = Restlytics.tracer
-            unless tracer && tracer.sampled? && started?
-              return __restlytics_request(req, body, &block)
-            end
-
-            start_ns = tracer.now_ns
-            response = __restlytics_request(req, body, &block)
-            begin
-              end_ns = tracer.now_ns
-              host = address
-              scheme = use_ssl? ? "https" : "http"
-              raw_path = req.respond_to?(:path) ? req.path.to_s : "/"
-              full = "#{scheme}://#{host}#{raw_path}"
-
-              span = tracer.add_child_span("http #{host}", start_ns, end_ns)
-              if span
-                method = req.respond_to?(:method) ? req.method.to_s : "GET"
-                span.set_string("http.request.method", method)
-                span.set_string("url.full", Restlytics::Redact.url(full, query_keys))
-                span.set_string("server.address", host.to_s)
-                if response.respond_to?(:code)
-                  span.set_int("http.response.status_code", response.code.to_i)
-                end
-                span.set_string("restlytics.category", "http")
-              end
-            rescue StandardError
-              # outbound HTTP instrumentation never breaks the call
-            end
-
-            response
-          end
-        end
-      rescue StandardError
-        # best-effort: if patching fails, outbound HTTP just isn't instrumented
+        NetHttpInstrumentation.install(
+          tracer: Restlytics.tracer,
+          query_keys: Restlytics.config.query_keys
+        )
       end
     end
   end

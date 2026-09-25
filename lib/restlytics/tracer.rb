@@ -28,7 +28,7 @@ module Restlytics
     # at the end -- there is no cross-request reuse to leak.
     class State
       attr_accessor :enabled, :sampled, :trace_id, :root_parent_span_id,
-                    :root_span, :spans, :wall_anchor_ns, :mono_anchor_ns,
+                    :root_span_id, :root_span, :spans, :wall_anchor_ns, :mono_anchor_ns,
                     :db_query_count
 
       def initialize
@@ -36,6 +36,7 @@ module Restlytics
         @sampled = false
         @trace_id = ""
         @root_parent_span_id = nil
+        @root_span_id = nil
         @root_span = nil
         @spans = []
         @wall_anchor_ns = 0
@@ -72,7 +73,26 @@ module Restlytics
     end
 
     def root_span_id
-      state&.root_span&.span_id
+      state&.root_span_id
+    end
+
+    def active?
+      st = state
+      st && st.enabled && !st.trace_id.empty?
+    end
+
+    # Mint a CLIENT SpanContext for outbound propagation. Unsampled traces still
+    # propagate with flags=00; sampled callers reuse span_id when recording the
+    # local CLIENT span so its downstream parent relationship is exact.
+    def outbound_context
+      st = state
+      return nil unless st && st.enabled && !st.trace_id.empty?
+
+      span_id = Ids.span_id
+      {
+        traceparent: Ids.traceparent(st.trace_id, span_id, st.sampled),
+        span_id: span_id
+      }
     end
 
     # Open the root SERVER span at request start.
@@ -104,12 +124,13 @@ module Restlytics
       # Anchor wall-clock <-> monotonic clocks together.
       st.wall_anchor_ns = wall_clock_ns
       st.mono_anchor_ns = mono_ns
+      st.root_span_id = Ids.span_id
 
       return unless st.sampled # not sampled: stay cheap, record nothing
 
       st.root_span = Span.new(
         trace_id: st.trace_id,
-        span_id: Ids.span_id,
+        span_id: st.root_span_id,
         parent_span_id: st.root_parent_span_id,
         name: name,
         kind: Span::KIND_SERVER,
@@ -124,14 +145,14 @@ module Restlytics
     # (e.g. sql.active_record reports elapsed time), so callers back-date the start.
     # Returns nil when not sampled or when the buffer cap is hit (telemetry must
     # never grow unbounded).
-    def add_child_span(name, start_ns, end_ns, kind = Span::KIND_CLIENT)
+    def add_child_span(name, start_ns, end_ns, kind = Span::KIND_CLIENT, span_id: nil)
       st = state
       return nil unless st && st.enabled && st.sampled && st.root_span
       return nil if st.spans.length >= @max_spans
 
       span = Span.new(
         trace_id: st.trace_id,
-        span_id: Ids.span_id,
+        span_id: span_id || Ids.span_id,
         parent_span_id: st.root_span.span_id,
         name: name,
         kind: kind,
